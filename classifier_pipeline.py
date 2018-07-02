@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import random as rnd
 import os
+import matplotlib.pyplot as plt
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC, LinearSVC
@@ -13,13 +14,20 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.linear_model import Perceptron
 from sklearn.linear_model import SGDClassifier
 from sklearn.tree import DecisionTreeClassifier
+from lightgbm import LGBMClassifier
 
 from sklearn.pipeline import Pipeline, FeatureUnion, make_pipeline, make_union
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.preprocessing import LabelEncoder, LabelBinarizer, RobustScaler, StandardScaler, Imputer
 from sklearn.model_selection import cross_val_score
 
-from selector import NumberSelector, TextSelector, LabelBinarizerPipelineFriendly
+from selector import NumberSelector, TextSelector, LabelBinarizerPipelineFriendly, Debug
+
+def print_importances(clf, X_train):
+    # TODO: would be nice to convert this to matplotlib bar chart.
+    values = sorted(zip(X_train.columns, clf.feature_importances_), key=lambda x: x[1] * -1)
+    for column, imp in values:
+        print("Feature {0}: {1}".format(column, imp))
 
 dirname = os.path.dirname(__file__)
 train_df = pd.read_csv(dirname / Path("./data/train.csv"))
@@ -34,8 +42,16 @@ y_train = train_df.drop(label_drops, axis=1)
 X_test = test_df.drop("PassengerId", axis=1).copy()
 print("{}, {}, {}".format(X_train.shape, y_train.shape, X_test.shape))
 
+
+print(X_train.isnull().sum())
+X_train["Embarked"].fillna('Q', inplace=True)
+X_test["Embarked"].fillna('Q', inplace=True)
+
+X_train["CabinNull"] = X_train["Embarked"].notnull().astype('int')
+X_test["CabinNull"] = X_test["Embarked"].notnull().astype('int')
+
 #print(X_train.head())
-print(y_train.head())
+#print(y_train.head())
 
 pclass = make_pipeline(
     NumberSelector(key='Pclass'))
@@ -58,25 +74,30 @@ sibsp = make_pipeline(
 parch = make_pipeline(
     NumberSelector(key="Parch"),
     Imputer(strategy="median"))
+cabin = make_pipeline(
+    NumberSelector(key="CabinNull"))
 #ticket
-#cabin
 #name
 
 features = FeatureUnion([
     ('sex', sex),
     ('pclass', pclass),
     ('age', age),
-    #('embarked', embarked),
+    ('embarked', embarked),
     ('fare', fare),
     ('sibsp', sibsp),
     ('parch', parch),
+    ('cabin', cabin)
     #('ticket', ticket),
-    #('cabin', cabin)
     #('name', name)
 ])
 features.fit_transform(X_train, y_train)
-print(X_train.head())
+#print(X_train.head())
 
-pipe = make_pipeline(features, RandomForestClassifier())
+pipe = make_pipeline(features, LGBMClassifier())
+pipe.fit(X_train, y_train.values.ravel())
 scores = cross_val_score(pipe, X_train, y_train.values.ravel(), cv=10, scoring='accuracy')
-print(scores.mean())  # Score = 80.0%
+print(scores.mean())  # Score = 82.0%
+
+clf = pipe.steps[1][1]
+print_importances(clf, X_train)

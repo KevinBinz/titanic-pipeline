@@ -29,6 +29,7 @@ class NumberSelector(BaseEstimator, TransformerMixin):
     def transform(self, X):
         return X[[self.key]]
 
+
 class LabelBinarizerPipelineFriendly(LabelBinarizer):
     def fit(self, X, y=None):
         """this would allow us to fit the model based on the X input."""
@@ -39,3 +40,15 @@ class LabelBinarizerPipelineFriendly(LabelBinarizer):
 
     def fit_transform(self, X, y=None):
         return super(LabelBinarizerPipelineFriendly, self).fit(X).transform(X)
+
+
+class Debug(BaseEstimator, TransformerMixin):
+    def transform(self, X):
+        #print(X.shape)
+        print(X[0:5,:])
+        print("End")
+        # what other output you want
+        return X
+
+    def fit(self, X, y=None, **fit_params):
+        return self
