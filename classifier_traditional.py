@@ -1,24 +1,24 @@
-import pandas as pd
 import os
-from pathlib import Path
 
+import numpy as np
+import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import cross_val_score
 
+from logger import logger
+
 dirname = os.path.dirname(__file__)
-train_df = pd.read_csv(dirname / Path("./data/train.csv"))
-test_df = pd.read_csv(dirname / Path("./data/test.csv"))
+train_df = pd.read_csv("./data/train.csv")
+test_df = pd.read_csv("./data/test.csv")
 
-Xtrain_drop = ["PassengerId", "Survived", "Name", "Sex", "Age", "SibSp", "Parch", "Ticket", "Fare", "Cabin", "Embarked"]
-Xtest_drop = ["PassengerId", "Name", "Sex", "Age", "SibSp", "Parch", "Ticket", "Fare", "Cabin", "Embarked"]
-ytrain_drop = ["PassengerId", "Pclass", "Name", "Sex", "Age", "SibSp", "Parch", "Ticket", "Fare", "Cabin", "Embarked"]
+feature_list = ["Pclass"]
+label = "Survived"
+X_train = train_df[feature_list].copy()
+X_test = test_df[feature_list].copy()
+y_train = train_df[label].values.ravel()
 
-X_train = train_df.drop(Xtrain_drop, axis=1)  # Only remaining column: PClass
-X_test = test_df.drop(Xtest_drop, axis=1)  # Only remaining column: PClass
-y_train = train_df.drop(ytrain_drop, axis=1)  # Only remaining column: Survived
+logger.info("train X/Y = {}/{}, test X={}".format(X_train.shape, y_train.shape, X_test.shape))
 
-print("{}, {}, {}".format(X_train.shape, y_train.shape, X_test.shape))
-
-clf = LogisticRegression()
-scores = cross_val_score(clf, X_train, y_train.values.ravel(), cv=10, scoring='accuracy')
-print(scores.mean())  # Score: 67.9%
+clf = LogisticRegression(solver="lbfgs")
+scores = cross_val_score(clf, X_train, y_train, cv=10, scoring='accuracy')
+logger.info("Validation Accuracy: {:.3f} ± {:.3f}".format(np.mean(scores), 2 * np.std(scores)))

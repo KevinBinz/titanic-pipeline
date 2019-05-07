@@ -1,103 +1,161 @@
-from pathlib import Path
-
 import pandas as pd
 import numpy as np
-import random as rnd
-import os
-import matplotlib.pyplot as plt
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC, LinearSVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.linear_model import Perceptron
-from sklearn.linear_model import SGDClassifier
-from sklearn.tree import DecisionTreeClassifier
+from eli5.lightgbm import explain_weights_lightgbm
+from eli5.formatters import format_as_text
+from eli5 import transform_feature_names
 from lightgbm import LGBMClassifier
-
-from sklearn.pipeline import Pipeline, FeatureUnion, make_pipeline, make_union
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.preprocessing import LabelEncoder, LabelBinarizer, RobustScaler, StandardScaler, Imputer
 from sklearn.model_selection import cross_val_score
+from sklearn.pipeline import FeatureUnion, Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
 
-from selector import NumberSelector, TextSelector, LabelBinarizerPipelineFriendly, Debug
-
-def print_importances(clf, X_train):
-    # TODO: would be nice to convert this to matplotlib bar chart.
-    values = sorted(zip(X_train.columns, clf.feature_importances_), key=lambda x: x[1] * -1)
-    for column, imp in values:
-        print("Feature {0}: {1}".format(column, imp))
-
-dirname = os.path.dirname(__file__)
-train_df = pd.read_csv(dirname / Path("./data/train.csv"))
-test_df = pd.read_csv(dirname / Path("./data/test.csv"))
-combine = [train_df, test_df]
-
-feature_names = ["Pclass", "Name", "Sex", "Age", "SibSp", "Parch", "Ticket", "Fare", "Cabin", "Embarked"]
-feature_drops = ["Survived", "PassengerId"]
-label_drops = ["Pclass", "PassengerId", "Name", "Sex", "Age", "SibSp", "Parch", "Ticket", "Fare", "Cabin", "Embarked"]
-X_train = train_df.drop(feature_drops, axis=1)
-y_train = train_df.drop(label_drops, axis=1)
-X_test = test_df.drop("PassengerId", axis=1).copy()
-print("{}, {}, {}".format(X_train.shape, y_train.shape, X_test.shape))
+from logger import logger
+from pipeline_lib import NumberSelector, TextSelector, CustomLabelBinarizer, TextImputer, ModifiedCountVec
 
 
-print(X_train.isnull().sum())
-X_train["Embarked"].fillna('Q', inplace=True)
-X_test["Embarked"].fillna('Q', inplace=True)
+class Headers:
+    P_CLASS = "Pclass"
+    NAME = "Name"
+    SEX = "Sex"
+    AGE = "Age"
+    SIBLING_SPOUSE = "SibSp"
+    PARENT_CHILDREN = "Parch"
+    TICKET = "Ticket"
+    FARE = "Fare"
+    CABIN = "Cabin"
+    EMBARKED = "Embarked"
+    SURVIVED = "Survived"
+    PASSENGER_ID = "PassengerId"
 
-X_train["CabinNull"] = X_train["Embarked"].notnull().astype('int')
-X_test["CabinNull"] = X_test["Embarked"].notnull().astype('int')
+    # Derived Columns
+    FAMILY_SIZE = "FamilySize"
 
-#print(X_train.head())
-#print(y_train.head())
 
-pclass = make_pipeline(
-    NumberSelector(key='Pclass'))
-sex = make_pipeline(
-    TextSelector(key='Sex'),
-    LabelBinarizerPipelineFriendly())
-age = make_pipeline(
-    NumberSelector(key="Age"),
-    Imputer(strategy="median"))
-embarked = make_pipeline(
-    TextSelector(key="Embarked"),
-    LabelBinarizerPipelineFriendly())
-fare = make_pipeline(
-    NumberSelector(key="Fare"),
-    Imputer(strategy="median"),
-    StandardScaler())
-sibsp = make_pipeline(
-    NumberSelector(key="SibSp"),
-    Imputer(strategy="median"))
-parch = make_pipeline(
-    NumberSelector(key="Parch"),
-    Imputer(strategy="median"))
-cabin = make_pipeline(
-    NumberSelector(key="CabinNull"))
-#ticket
-#name
+@transform_feature_names.register(NumberSelector)
+def odd_feature_names(transformer, in_names=None):
+    if in_names is None:
+        from eli5.sklearn.utils import get_feature_names
+        # generate default feature names
+        in_names = get_feature_names(transformer, num_features=transformer.n_features_)
+    # return a list of strings derived from in_names
+    return in_names[1::2]
 
-features = FeatureUnion([
-    ('sex', sex),
-    ('pclass', pclass),
-    ('age', age),
-    ('embarked', embarked),
-    ('fare', fare),
-    ('sibsp', sibsp),
-    ('parch', parch),
-    ('cabin', cabin)
-    #('ticket', ticket),
-    #('name', name)
-])
-features.fit_transform(X_train, y_train)
-#print(X_train.head())
+class ClassifierPipeline:
+    def print_importances(self, clf, X_train):
+        # TODO: would be nice to convert this to matplotlib bar chart.
+        values = sorted(zip(X_train.columns, clf.feature_importances_), key=lambda x: x[1] * -1)
+        for column, imp in values:
+            logger.info("Feature {0}: {1}".format(column, imp))
 
-pipe = make_pipeline(features, LGBMClassifier())
-pipe.fit(X_train, y_train.values.ravel())
-scores = cross_val_score(pipe, X_train, y_train.values.ravel(), cv=10, scoring='accuracy')
-print(scores.mean())  # Score = 82.0%
+    def drop_nonfeatures(self, df, features):
+        transformers = features.transformer_list
+        feature_list = list()
+        for transformer in transformers:
+            (name, _) = transformer
+            feature_list.append(name)
+        df_columns = df.columns.values
 
-clf = pipe.steps[1][1]
-print_importances(clf, X_train)
+        shape_before = df.shape
+        drop_cols = list()
+        for column in df_columns:
+            if column not in feature_list:
+                drop_cols.append(column)
+                df.drop(labels=column, axis=1, inplace=True)
+        logger.info("drop_nonfeatures(). Shape Changed: {} -> {}".format(shape_before, df.shape))
+        logger.info("... columns dropped: {}".format(drop_cols))
+        logger.info("... columns remaining: {}".format(df.columns.values.tolist()))
+        assert sorted(feature_list) == sorted(df.columns.values)
+        return df
+
+    def get_data(self):
+        # Data Ingestion
+        X_train = pd.read_csv("./data/train.csv")
+        y_train = X_train[Headers.SURVIVED].copy().values.ravel()
+        X_train.drop(Headers.SURVIVED, axis=1, inplace=True)
+
+        X_test = pd.read_csv("./data/test.csv")
+
+        # Data Transformation
+        X_train[Headers.FAMILY_SIZE] = X_train[Headers.SIBLING_SPOUSE] + X_train[Headers.PARENT_CHILDREN]
+        X_test[Headers.FAMILY_SIZE] = X_test[Headers.SIBLING_SPOUSE] + X_test[Headers.PARENT_CHILDREN]
+
+        # X_train["CabinNull"] = X_train["Embarked"].notnull().astype('int')
+        # X_test["CabinNull"] = X_test["Embarked"].notnull().astype('int')
+
+        # Data Synchronization
+        pipe = self.get_pipe()
+        X_train = self.drop_nonfeatures(X_train, pipe)
+        X_test = self.drop_nonfeatures(X_test, pipe)
+
+        logger.info("train X/Y = {}/{}, test X={}".format(X_train.shape, y_train.shape, X_test.shape))
+        logger.info(X_train.isnull().sum())
+        logger.info(X_train.dtypes)
+
+        return X_train, y_train, X_test
+
+    def get_pipe(self):
+        return FeatureUnion([
+            # Categorical Features
+            (Headers.SEX, Pipeline([
+                ('selector', TextSelector(key=Headers.SEX)),
+                ('imputer',  TextImputer()),
+                ('encoder', CustomLabelBinarizer())
+            ])),
+            (Headers.EMBARKED, Pipeline([
+                ('selector', TextSelector(key=Headers.EMBARKED)),
+                ('imputer',  TextImputer()),
+                ('encoder', CustomLabelBinarizer())
+            ])),
+            # (Headers.NAME, Pipeline([
+            #     ('selector', TextSelector(key=Headers.NAME)),
+            #     ('imputer',  TextImputer()),
+            #     ('encoder', ModifiedCountVec(max_features=10))
+            # ])),
+            # Numeric Features
+            (Headers.P_CLASS, Pipeline([
+                ('selector', NumberSelector(key=Headers.P_CLASS)),
+                # ('imputer',  SimpleImputer(strategy="median"))
+            ])),
+            (Headers.AGE, Pipeline([
+                ('selector', NumberSelector(key=Headers.AGE)),
+                ('imputer',  SimpleImputer(strategy="median"))
+            ])),
+            (Headers.FAMILY_SIZE, Pipeline([
+                ('selector', NumberSelector(key=Headers.FAMILY_SIZE)),
+                ('imputer',  SimpleImputer(strategy="median"))
+            ])),
+            (Headers.FARE, Pipeline([
+                ('selector', NumberSelector(key=Headers.FARE)),
+                ('imputer',  SimpleImputer(strategy="median")),
+                ('scaler', StandardScaler())
+            ])),
+        ])
+
+    def train(self, X_train, y_train):
+        features = self.get_pipe()
+        # logger.info(features.get_feature_names())
+        features.fit_transform(X_train, y_train)
+        pipe = Pipeline([
+            ('features', features),
+            ('model', LGBMClassifier()),
+        ])
+        logger.debug(features.get_params().keys())
+        pipe.fit(X_train, y_train)
+        scores = cross_val_score(pipe, X_train, y_train, cv=5, scoring='accuracy')
+        logger.info("Validation Accuracy: {:.3f} ± {:.3f}".format(np.mean(scores), 2 * np.std(scores)))
+
+        clf = pipe.steps[1][1]
+        self.print_importances(clf, X_train)
+        # logger.info(format_as_text(explain_weights_lightgbm(lgb=clf, vec=features)))
+        return pipe
+
+    def predict(self, pipe, X_test):
+        y_test = pipe.predict(X_test)
+        return y_test
+
+
+if __name__ == '__main__':
+    model = ClassifierPipeline()
+    X_train, y_train, X_test = model.get_data()
+    pipe = model.train(X_train, y_train)
+    y_test = model.predict(pipe, X_test)
