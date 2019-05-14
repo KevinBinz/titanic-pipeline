@@ -1,7 +1,10 @@
+import pandas as pd
+
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import LabelBinarizer
 from sklearn.feature_extraction.text import CountVectorizer
 from eli5.sklearn.utils import get_feature_names
+from logger import logger
 
 # class CustomPipeline(BaseEstimator, TransformerMixin):
 #     """
@@ -28,6 +31,49 @@ from eli5.sklearn.utils import get_feature_names
 #         if names is None:
 #             raise ValueError('No step with get_feature_names')
 #         return names
+
+
+class ColumnSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, columns):
+        self.columns = columns
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        assert isinstance(X, pd.DataFrame)
+
+        try:
+            return X[self.columns]
+        except KeyError:
+            cols_error = list(set(self.columns) - set(X.columns))
+            raise KeyError("The DataFrame does not include the columns: %s" % cols_error)
+
+
+class TypeSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, dtype):
+        self.dtype = dtype
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        assert isinstance(X, pd.DataFrame)
+        out_df = X.select_dtypes(include=[self.dtype])
+        logger.info("TypeSelector.transform(dtype={} shape={} columns={})".format(self.dtype, out_df.shape, out_df.columns.values))
+        return out_df
+
+
+class StringIndexer(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        assert isinstance(X, pd.DataFrame)
+        return X.apply(lambda s: s.cat.codes.replace(
+            {-1: len(s.cat.categories)}
+        ))
+
 
 class TextSelector(BaseEstimator, TransformerMixin):
     """
@@ -82,7 +128,20 @@ class TextImputer(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        logger.info("TextImputer.transform(X shape={}, dtypes={} nulls={})".format(X.shape, X.dtypes, X.isna().sum()))
         X.fillna('UNK', inplace=True)
+        return X
+
+
+class CategoryImputer(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        unk_token = 'UNK'
+        X = X.cat.add_categories(unk_token)
+        logger.info("CategoryImputer.transform(X shape={}, dtypes={} nulls={})".format(X.shape, X.dtypes, X.isna().sum()))
+        X.fillna(unk_token, inplace=True)
         return X
 
 
@@ -103,7 +162,7 @@ class ModifiedCountVec(BaseEstimator, TransformerMixin):
 class Debug(BaseEstimator, TransformerMixin):
     def transform(self, X):
         #print(X.shape)
-        print(X[0:5,:])
+        print(X[0:5, :])
         print("End")
         # what other output you want
         return X
