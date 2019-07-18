@@ -163,8 +163,6 @@ class Debug(BaseEstimator, TransformerMixin):
     def transform(self, X):
         #print(X.shape)
         print(X[0:5, :])
-        print("End")
-        # what other output you want
         return X
 
     def fit(self, X, y=None, **fit_params):
